@@ -116,6 +116,13 @@ instance FromJSON Tweet
 instance ToJSON   Location
 instance FromJSON Location
 
+newtype TweetUpd = TweetUpd {tweetUpdMessage :: Text} deriving (Eq, Generic, Show)
+
+instance ToJSON TweetUpd where
+  toJSON (TweetUpd t) =
+    object ["message" .= t]
+
+
 data TweetMapping = TweetMapping deriving (Eq, Show)
 
 instance ToJSON TweetMapping where
@@ -149,6 +156,9 @@ otherTweet = Tweet { user     = "notmyapp"
                    , age      = 1000
                    , location = Location 40.12 (-71.34) }
 
+tweetUpd :: TweetUpd
+tweetUpd = TweetUpd "Use haskell all the time!"
+
 resetIndex :: BH IO ()
 resetIndex = do
   _ <- deleteExampleIndex
@@ -170,6 +180,12 @@ insertData' ids = do
 insertOther :: BH IO ()
 insertOther = do
   _ <- indexDocument testIndex testMapping defaultIndexDocumentSettings otherTweet (DocId "2")
+  _ <- refreshIndex testIndex
+  return ()
+
+updateData :: BH IO ()
+updateData = do
+  _ <- updateDocument testIndex testMapping defaultUpdateDocumentSettings tweetUpd (DocId "1")
   _ <- refreshIndex testIndex
   return ()
 
@@ -314,6 +330,14 @@ main = hspec $ do
       let newTweet = eitherDecode
                      (responseBody docInserted) :: Either String (EsResult Tweet)
       liftIO $ (fmap getSource newTweet `shouldBe` Right (Just exampleTweet))
+
+    it "indexes, *updates*, gets, and then deletes the generated document" $ withTestEnv $ do
+      _ <- insertData
+      _ <- updateData
+      docInserted <- getDocument testIndex testMapping (DocId "1")
+      let updTweet = eitherDecode
+                     (responseBody docInserted) :: Either String (EsResult Tweet)
+      liftIO $ (fmap getSource updTweet `shouldBe` Right (Just (exampleTweet {message = (tweetUpdMessage tweetUpd)})))
 
     it "produces a parseable result when looking up a bogus document" $ withTestEnv $ do
       doc <- getDocument testIndex testMapping  (DocId "bogus")

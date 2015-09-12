@@ -30,6 +30,7 @@ module Database.Bloodhound.Types
        ( defaultCache
        , defaultIndexSettings
        , defaultIndexDocumentSettings
+       , defaultUpdateDocumentSettings 
        , mkSort
        , showText
        , unpackId
@@ -66,6 +67,7 @@ module Database.Bloodhound.Types
        , VersionControl(..)
        , DocumentParent(..)
        , IndexDocumentSettings(..)
+       , UpdateDocumentSettings(..)
        , Query(..)
        , Search(..)
        , SearchType(..)
@@ -486,6 +488,19 @@ data VersionControl = NoVersionControl
 newtype DocumentParent = DocumentParent DocId
   deriving (Eq, Show)
 
+{-| 'UpdateDocumentSettings' are special settings supplied when indexing
+a document. For the best backwards compatiblity when new fields are
+added, you should probably prefer to start with 'defaultUpdateDocumentSettings'
+-}
+data UpdateDocumentSettings =
+  UpdateDocumentSettings { udsScript         :: Maybe Script
+			 , udsRetryAttempts  :: Int
+			 , udsVersionControl :: VersionControl
+                         } deriving (Eq, Show)
+
+defaultUpdateDocumentSettings :: UpdateDocumentSettings
+defaultUpdateDocumentSettings = UpdateDocumentSettings Nothing 0 NoVersionControl 
+
 {-| 'IndexDocumentSettings' are special settings supplied when indexing
 a document. For the best backwards compatiblity when new fields are
 added, you should probably prefer to start with 'defaultIndexDocumentSettings'
@@ -626,7 +641,7 @@ newtype FieldName = FieldName Text deriving (Eq, Show)
 {-| 'Script' is often used in place of 'FieldName' to specify more
 complex ways of extracting a value from a document.
 -}
-newtype Script = Script { scriptText :: Text } deriving (Eq, Show)
+data Script = Script { scriptText :: Text, scriptParams :: Maybe (M.Map Text Value) } deriving (Eq, Show)
 
 {-| 'CacheName' is used in 'RegexpFilter' for describing the
     'CacheKey' keyed caching behavior.
@@ -1447,6 +1462,12 @@ instance Show TimeInterval where
   show Minutes  = "m"
   show Seconds  = "s"
 
+fieldNameToAggJSON :: FieldName -> Value
+fieldNameToAggJSON (FieldName n) = object ["field" .= n]
+
+instance ToJSON Script where
+  toJSON (Script s p) = omitNulls ["script" .= s, "params" .= p ]
+
 instance ToJSON Aggregation where
   toJSON (TermsAgg (TermsAggregation term include exclude order minDocCount size shardSize collectMode executionHint termAggs)) =
     omitNulls ["terms" .= omitNulls [ toJSON' term,
@@ -1473,16 +1494,18 @@ instance ToJSON Aggregation where
                                                "post_offset" .= postOffset
                                              ],
                "aggs"           .= dateHistoAggs ]
+  
 
   toJSON (ValueCountAgg a) = object ["value_count" .= v]
     where v = case a of
-                (FieldValueCount (FieldName n)) -> object ["field" .= n]
-                (ScriptValueCount (Script s))   -> object ["script" .= s]
+                (FieldValueCount fName)  -> fieldNameToAggJSON fName 
+                (ScriptValueCount scrpt) -> toJSON scrpt
 
   toJSON (SumAgg a) = object ["sum" .= v]
     where v = case a of
-                (FieldSum (FieldName n)) -> object ["field" .= n]
-                (ScriptSum (Script s))   -> object ["script" .= s]
+                (FieldSum fName)  -> fieldNameToAggJSON fName 
+                (ScriptSum scrpt) -> toJSON scrpt
+
 
 
   toJSON (FilterAgg (FilterAggregation filt ags)) =

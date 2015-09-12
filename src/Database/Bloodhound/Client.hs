@@ -33,6 +33,7 @@ module Database.Bloodhound.Client
        , putMapping
        , deleteMapping
        , indexDocument
+       , updateDocument 
        , getDocument
        , documentExists
        , deleteDocument
@@ -376,6 +377,19 @@ deleteMapping (IndexName indexName)
   -- erroneously. The correct API call is: "/INDEX/_mapping/MAPPING_NAME"
   delete =<< joinPath [indexName, "_mapping", mappingName]
 
+
+versionCtlParams :: VersionControl -> [(Text, Maybe Text)]
+versionCtlParams ctrl =
+  let vt = T.pack . show . docVersionNumber
+      versionParams v t = [ ("version", Just $ vt v), ("version_type", Just t)]
+  in case ctrl of
+       NoVersionControl                    -> []
+       InternalVersion v                   -> versionParams v "internal"
+       ExternalGT (ExternalDocVersion v)   -> versionParams v "external_gt"
+       ExternalGTE (ExternalDocVersion v)  -> versionParams v "external_gte"
+       ForceVersion (ExternalDocVersion v) -> versionParams v "force"
+
+
 -- | 'indexDocument' is the primary way to save a single document in
 --   Elasticsearch. The document itself is simply something we can
 --   convert into a JSON 'Value'. The 'DocId' will function as the
@@ -390,21 +404,30 @@ indexDocument (IndexName indexName)
   (MappingName mappingName) cfg document (DocId docId) =
   bindM2 put url (return body)
   where url = addQuery params <$> joinPath [indexName, mappingName, docId]
-        versionCtlParams = case idsVersionControl cfg of
-          NoVersionControl -> []
-          InternalVersion v -> versionParams v "internal"
-          ExternalGT (ExternalDocVersion v) -> versionParams v "external_gt"
-          ExternalGTE (ExternalDocVersion v) -> versionParams v "external_gte"
-          ForceVersion (ExternalDocVersion v) -> versionParams v "force"
-        vt = T.pack . show . docVersionNumber
-        versionParams v t = [ ("version", Just $ vt v)
-                            , ("version_type", Just t)
-                            ]
         parentParams = case idsParent cfg of
           Nothing -> []
           Just (DocumentParent (DocId p)) -> [ ("parent", Just p) ]
-        params = versionCtlParams ++ parentParams
+        params = (versionCtlParams $ idsVersionControl cfg) ++ parentParams
         body = Just (encode document)
+
+     
+-- | 'updateDocument' is the primary way to save a single document in
+--   Elasticsearch. The document itself is simply something we can
+--   convert into a JSON 'Value'. The 'DocId' will function as the
+--   primary key for the document.
+--
+-- >>> resp <- runBH' $ updateDocument testIndex testMapping defaultIndexDocumentSettings exampleTweet (DocId "1")
+-- >>> print resp
+-- Response {responseStatus = Status {statusCode = 201, statusMessage = "Created"}, responseVersion = HTTP/1.1, responseHeaders = [("Content-Type","application/json; charset=UTF-8"),("Content-Length","74")], responseBody = "{\"_index\":\"twitter\",\"_type\":\"tweet\",\"_id\":\"1\",\"_version\":1,\"created\":true}", responseCookieJar = CJ {expose = []}, responseClose' = ResponseClose}
+updateDocument :: (ToJSON doc, MonadBH m) => IndexName  -> MappingName
+                 -> UpdateDocumentSettings -> doc -> DocId -> m Reply
+updateDocument (IndexName indexName) 
+	       (MappingName mappingName) cfg document (DocId docId) =
+  bindM2 post url (return body)
+  where url    = addQuery params <$> joinPath [indexName, mappingName, docId, "_update"]
+        retryParams = [("retry_on_conflict", Just (T.pack $ show $ udsRetryAttempts cfg))]
+        params = (versionCtlParams $ udsVersionControl cfg) ++ retryParams
+        body   = Just (encode $ object [ "doc" .= (toJSON document)] )
 
 -- | 'deleteDocument' is the primary way to delete a single document.
 --
